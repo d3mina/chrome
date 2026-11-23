@@ -59,6 +59,8 @@ chrome.runtime.onInstalled.addListener(async () => {
   if (!Array.isArray(data.keynav_exclude)) {
     await chrome.storage.local.set({ keynav_exclude: KEYNAV_DEFAULT_EXCLUDE.slice() });
   }
+  // Drop the pre-v2 auto dark mode cache so stale false-"light" verdicts don't linger.
+  await chrome.storage.local.remove("darkmode_autocache");
 });
 
 function normalizeDomain(d) {
