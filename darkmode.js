@@ -304,9 +304,10 @@
 
   function hasPendingStylesheets() {
     // After window.load, any link with !link.sheet failed to load (404/error).
+    // Also skip lazy-theme stubs (like GitHub's data-href links) that have no href.
     if (document.readyState === "complete") return false;
     for (const link of document.querySelectorAll('link[rel="stylesheet"]')) {
-      if (!link.disabled && !link.sheet) return true;
+      if (!link.disabled && link.href && !link.sheet) return true;
     }
     return false;
   }
