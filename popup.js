@@ -37,6 +37,7 @@ const darkBrightness = document.getElementById("darkBrightness");
 const darkBrightnessVal = document.getElementById("darkBrightnessVal");
 const scopeSite = document.getElementById("scopeSite");
 const scopeGlobal = document.getElementById("scopeGlobal");
+const darkAutoToggle = document.getElementById("darkAutoToggle");
 const darkOverrideLabel = document.getElementById("darkOverrideLabel");
 const darkOverrideSub = document.getElementById("darkOverrideSub");
 const darkClearSite = document.getElementById("darkClearSite");
@@ -74,13 +75,16 @@ async function loadDarkMode() {
   updateDarkOverrideRow(siteState, globalState);
 }
 
+// The auto switch shows darkmode_global, so it also follows changes made with
+// "All sites" + the big switch.
 function updateDarkOverrideRow(siteState, globalState) {
+  darkAutoToggle.checked = globalState;
   darkOverrideLabel.textContent = darkHost || "This site";
   darkClearSite.disabled = siteState === undefined;
   if (siteState !== undefined) {
     darkOverrideSub.textContent = `Fixed ${siteState ? "ON" : "OFF"} for this site`;
   } else {
-    darkOverrideSub.textContent = `Following all-sites default (${globalState ? "ON" : "OFF"})`;
+    darkOverrideSub.textContent = `Following auto dark (${globalState ? "ON" : "OFF"})`;
   }
 }
 
@@ -140,6 +144,14 @@ async function pushDarkSettings() {
 
 darkToggle.addEventListener("change", applyDark);
 
+// Writes the all-sites default. The old separate "darkmode_auto" key is
+// migrated into it by background.js.
+darkAutoToggle.addEventListener("change", async () => {
+  await chrome.storage.local.set({ darkmode_global: darkAutoToggle.checked });
+  await pushDarkSettings();
+  await loadDarkMode();
+});
+
 darkClearSite.addEventListener("click", async () => {
   if (!darkHost) return;
   await chrome.storage.local.remove(darkSiteKey());
@@ -150,7 +162,12 @@ darkClearSite.addEventListener("click", async () => {
 darkBrightness.addEventListener("input", () => {
   darkBrightnessVal.textContent = darkBrightness.value + "%";
 });
-darkBrightness.addEventListener("change", applyDark);
+// Not applyDark: that saves the ON/OFF state for this site, so a brightness
+// change would pin the site and it would stop following the auto switch.
+darkBrightness.addEventListener("change", async () => {
+  await chrome.storage.local.set({ darkmode_brightness: parseInt(darkBrightness.value) });
+  await pushDarkSettings();
+});
 
 scopeSite.addEventListener("click", () => {
   darkScope = "site";

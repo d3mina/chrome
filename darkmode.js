@@ -247,9 +247,11 @@
       sendResponse({ ok: true });
     }
     if (msg.type === "darkmode_settings") {
-      // The site's switch was cleared in the popup: recompute from the stored
-      // settings. siteState comes as null when there is no override.
+      // The popup changed a setting (auto switch, site switch cleared,
+      // brightness): recompute from the stored settings. siteState comes as
+      // null when there is no override.
       brightness = msg.brightness || brightness;
+      if (isDarkApplied()) applyDarkMode(true, brightness); // new brightness
       const site = msg.siteState === null || msg.siteState === undefined ? undefined : msg.siteState;
       setDarkWanted(site !== undefined ? site === true : msg.global === true);
       sendResponse({ ok: true });

@@ -228,17 +228,34 @@
         </div>
       </div>
 
+      <!-- This switch is the all-sites default (darkmode_global), the same
+           setting as "All sites" + the big switch. Dark mode inverts only light
+           pages, so "auto" and "all sites" are one setting, not two. -->
+      <div class="cc-row">
+        <div>
+          <div class="cc-label">Auto dark on light pages</div>
+          <div class="cc-sub">
+            Measures the page background on every site and inverts only the
+            light ones, so sites that are already dark stay untouched.
+          </div>
+        </div>
+        <label class="big-switch">
+          <input type="checkbox" id="darkAutoToggle">
+          <span class="big-slider"></span>
+        </label>
+      </div>
+
       <div class="cc-row">
         <div>
           <div class="cc-label" id="darkOverrideLabel">This site</div>
           <div class="cc-sub" id="darkOverrideSub">—</div>
         </div>
-        <button class="cc-btn primary" id="darkClearSite" disabled>Use default</button>
+        <button class="cc-btn primary" id="darkClearSite" disabled>Use auto</button>
       </div>
 
       <div class="xdim-note">
         Only light pages are inverted. A page that is already dark stays as it is.
-        Order of precedence: this site's switch → all-sites default.
+        Order of precedence: this site's switch → auto dark on light pages.
       </div>
     </div>
   </div>
