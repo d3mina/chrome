@@ -108,20 +108,6 @@
       font-size: 12px; color: #aaa; min-width: 36px;
       text-align: right;
     }
-    .dark-scope {
-      display: flex; gap: 6px; margin-bottom: 10px;
-    }
-    .dark-scope button {
-      flex: 1; padding: 8px; border: 1px solid #2a2a4a;
-      background: #16213e; color: #888;
-      border-radius: 6px; font-size: 12px; font-weight: 600;
-      cursor: pointer; transition: all 0.15s;
-    }
-    .dark-scope button:focus { outline: none; }
-    .dark-scope button.active {
-      border-color: #e94560; color: #e94560;
-      background: #2a1525;
-    }
 
     /* ── Cookie Banner Dismisser & JSON Formatter ── */
     .nocookie-big-toggle {
@@ -215,9 +201,20 @@
       </div>
       <div class="dark-host" id="darkHost"></div>
 
-      <div class="dark-scope">
-        <button id="scopeSite" class="active">This site only</button>
-        <button id="scopeGlobal">All sites</button>
+      <!-- The big switch above is for this site only (darkmode_<host>).
+           This switch is the default for every site (darkmode_global). -->
+      <div class="cc-row">
+        <div>
+          <div class="cc-label">All sites</div>
+          <div class="cc-sub">
+            Dark mode on every site, for example in the evening.
+            The switch of a site above overrides this one.
+          </div>
+        </div>
+        <label class="big-switch">
+          <input type="checkbox" id="darkGlobalToggle">
+          <span class="big-slider"></span>
+        </label>
       </div>
 
       <div class="dark-section">
@@ -233,12 +230,11 @@
           <div class="cc-label" id="darkOverrideLabel">This site</div>
           <div class="cc-sub" id="darkOverrideSub">—</div>
         </div>
-        <button class="cc-btn primary" id="darkClearSite" disabled>Use default</button>
+        <button class="cc-btn primary" id="darkClearSite" disabled>Follow all sites</button>
       </div>
 
       <div class="xdim-note">
         Only light pages are inverted. A page that is already dark stays as it is.
-        Order of precedence: this site's switch → all-sites default.
       </div>
     </div>
   </div>

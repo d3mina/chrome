@@ -30,19 +30,20 @@ chrome.storage.local.get(["last_tab"], (data) => {
 // ═══════════════════════════════════
 //  Dark Mode
 // ═══════════════════════════════════
+// Two switches. "All sites" (darkmode_global) is the default for every site.
+// The big switch is for the current site only (darkmode_<host>); it overrides
+// "All sites" and stays saved until "Follow all sites" removes it.
 const darkToggle = document.getElementById("darkToggle");
 const darkStatus = document.getElementById("darkStatus");
 const darkHostEl = document.getElementById("darkHost");
 const darkBrightness = document.getElementById("darkBrightness");
 const darkBrightnessVal = document.getElementById("darkBrightnessVal");
-const scopeSite = document.getElementById("scopeSite");
-const scopeGlobal = document.getElementById("scopeGlobal");
+const darkGlobalToggle = document.getElementById("darkGlobalToggle");
 const darkOverrideLabel = document.getElementById("darkOverrideLabel");
 const darkOverrideSub = document.getElementById("darkOverrideSub");
 const darkClearSite = document.getElementById("darkClearSite");
 
 let darkHost = "";
-let darkScope = "site"; // "site" or "global"
 
 function darkSiteKey() {
   return "darkmode_" + darkHost;
@@ -53,7 +54,7 @@ async function loadDarkMode() {
   if (!tab || !tab.url) return;
 
   try { darkHost = new URL(tab.url).hostname; } catch { darkHost = ""; }
-  darkHostEl.textContent = darkHost ? `Current site: ${darkHost}` : "";
+  darkHostEl.textContent = darkHost ? `This site: ${darkHost}` : "";
 
   const data = await chrome.storage.local.get([
     darkSiteKey(), "darkmode_global", "darkmode_brightness",
@@ -75,12 +76,13 @@ async function loadDarkMode() {
 }
 
 function updateDarkOverrideRow(siteState, globalState) {
+  darkGlobalToggle.checked = globalState;
   darkOverrideLabel.textContent = darkHost || "This site";
   darkClearSite.disabled = siteState === undefined;
   if (siteState !== undefined) {
-    darkOverrideSub.textContent = `Fixed ${siteState ? "ON" : "OFF"} for this site`;
+    darkOverrideSub.textContent = `Saved: always ${siteState ? "ON" : "OFF"} on this site`;
   } else {
-    darkOverrideSub.textContent = `Following all-sites default (${globalState ? "ON" : "OFF"})`;
+    darkOverrideSub.textContent = `Following All sites (${globalState ? "ON" : "OFF"})`;
   }
 }
 
@@ -89,19 +91,13 @@ function updateDarkStatus(on) {
   darkStatus.className = "status " + (on ? "on" : "off");
 }
 
+// The big switch: saves ON or OFF for the current site only.
 async function applyDark() {
   const enabled = darkToggle.checked;
   const brightness = parseInt(darkBrightness.value);
   updateDarkStatus(enabled);
 
-  // Save preference
-  if (darkScope === "global") {
-    await chrome.storage.local.set({ darkmode_global: enabled });
-  } else {
-    const siteKey = "darkmode_" + darkHost;
-    await chrome.storage.local.set({ [siteKey]: enabled });
-  }
-  await chrome.storage.local.set({ darkmode_brightness: brightness });
+  await chrome.storage.local.set({ [darkSiteKey()]: enabled, darkmode_brightness: brightness });
 
   // Send to active tab's content script
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -140,6 +136,14 @@ async function pushDarkSettings() {
 
 darkToggle.addEventListener("change", applyDark);
 
+// "All sites". The old separate "darkmode_auto" key is migrated into
+// darkmode_global by background.js.
+darkGlobalToggle.addEventListener("change", async () => {
+  await chrome.storage.local.set({ darkmode_global: darkGlobalToggle.checked });
+  await pushDarkSettings();
+  await loadDarkMode();
+});
+
 darkClearSite.addEventListener("click", async () => {
   if (!darkHost) return;
   await chrome.storage.local.remove(darkSiteKey());
@@ -150,17 +154,11 @@ darkClearSite.addEventListener("click", async () => {
 darkBrightness.addEventListener("input", () => {
   darkBrightnessVal.textContent = darkBrightness.value + "%";
 });
-darkBrightness.addEventListener("change", applyDark);
-
-scopeSite.addEventListener("click", () => {
-  darkScope = "site";
-  scopeSite.classList.add("active");
-  scopeGlobal.classList.remove("active");
-});
-scopeGlobal.addEventListener("click", () => {
-  darkScope = "global";
-  scopeGlobal.classList.add("active");
-  scopeSite.classList.remove("active");
+// Not applyDark: that saves the ON/OFF state for this site, so a brightness
+// change would pin the site and it would stop following "All sites".
+darkBrightness.addEventListener("change", async () => {
+  await chrome.storage.local.set({ darkmode_brightness: parseInt(darkBrightness.value) });
+  await pushDarkSettings();
 });
 
 // ═══════════════════════════════════
