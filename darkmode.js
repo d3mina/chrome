@@ -66,14 +66,24 @@
   //  "Is this page light?" detection
   // ═══════════════════════════════════
 
-  // getComputedStyle gives us "rgb(r, g, b)" / "rgba(r, g, b, a)"; newer Chrome
-  // can also hand back "rgb(r g b / a)", so accept both separators.
+  // getComputedStyle reports classic colours as rgb()/rgba(), but keeps modern
+  // ones in their own syntax: color-mix() comes back as oklab(…) or
+  // color(srgb …), and lab()/oklch() stay as they are. Discord builds its whole
+  // theme with color-mix(), so an rgb()-only parser saw no background there at
+  // all and called the page light. A 1×1 canvas turns any CSS colour into sRGB.
+  let colorCtx;
   function parseColor(str) {
-    const m = /rgba?\(([^)]+)\)/i.exec(str || "");
-    if (!m) return null;
-    const p = m[1].replace(/\//g, " ").split(/[\s,]+/).filter(Boolean).map(Number);
-    if (p.length < 3 || p.some((n) => Number.isNaN(n))) return null;
-    return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 };
+    if (!str) return null;
+    if (!colorCtx) colorCtx = new OffscreenCanvas(1, 1).getContext("2d", { willReadFrequently: true });
+    colorCtx.clearRect(0, 0, 1, 1);
+    // The canvas ignores a colour it cannot parse and keeps the last fillStyle,
+    // so reset it first: unknown syntax then reads as transparent, not as the
+    // previous colour.
+    colorCtx.fillStyle = "transparent";
+    colorCtx.fillStyle = str;
+    colorCtx.fillRect(0, 0, 1, 1);
+    const [r, g, b, a] = colorCtx.getImageData(0, 0, 1, 1).data;
+    return { r, g, b, a: a / 255 };
   }
 
   function isLightColor(c) {
@@ -91,7 +101,20 @@
     return null;
   }
 
-  // true = page looks light, false = page is already dark
+  // True once the body shows any text. Script, style and <noscript> text is not
+  // rendered, and checkVisibility() skips it. Stops at the first hit, so a huge
+  // page costs no more than a small one.
+  function hasVisibleText() {
+    if (!document.body) return false;
+    const walk = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+      if (n.data.trim() && n.parentElement.checkVisibility()) return true;
+    }
+    return false;
+  }
+
+  // true = page looks light, false = page is already dark,
+  // null = nothing painted yet, so there is nothing to judge
   function detectLightPage() {
     // Sample a few spots rather than trusting <body>: plenty of sites paint the
     // real background on a wrapper div and leave body transparent.
@@ -117,11 +140,15 @@
       const htmlBg = parseColor(getComputedStyle(document.documentElement).backgroundColor);
       if (htmlBg && htmlBg.a >= 0.9) return isLightColor(htmlBg);
     }
-    // A page that opts into dark rendering gets the benefit of the doubt;
-    // otherwise the browser canvas is white.
+    // A page that opts into dark rendering gets the benefit of the doubt.
     const scheme = getComputedStyle(document.documentElement).colorScheme || "";
     if (/\bdark\b/.test(scheme) && !/\blight\b/.test(scheme)) return false;
-    return true;
+    // No background anywhere, so the white browser canvas shows. With text on
+    // it, that is a plain light page. Without text, it is usually an app that
+    // has not loaded its theme yet: Discord sets its theme class on <html> only
+    // after DOMContentLoaded and load. Do not call that light, or the dark app
+    // is inverted to white until a later check sees its theme.
+    return hasVisibleText() ? true : null;
   }
 
   // Remember the verdict per host so the next visit applies it at document_start
@@ -142,10 +169,19 @@
   }
 
   let lastVerdict; // avoids re-writing the cache on every re-check
+  let retryTimer;
 
   function runAutoCheck() {
     if (!autoEnabled || manualOverride || siteState !== undefined) return;
     const light = detectLightPage();
+    if (light === null) {
+      // Leave the page as it is, cache nothing, and look again soon: an app can
+      // paint its theme after every fixed check below has run. The time limit
+      // (from navigation start) stops the retries on pages that stay empty.
+      clearTimeout(retryTimer);
+      if (performance.now() < 10000) retryTimer = setTimeout(runAutoCheck, 250);
+      return;
+    }
     if (light !== isDarkApplied()) applyDarkMode(light, brightness);
     if (light !== lastVerdict) {
       lastVerdict = light;
