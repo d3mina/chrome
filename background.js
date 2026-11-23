@@ -61,6 +61,16 @@ chrome.runtime.onInstalled.addListener(async () => {
   }
 });
 
+// Dark mode had a separate "auto" switch that inverted only light pages.
+// Dark mode itself does that now, so "auto on" becomes "on for all sites", and
+// the old key goes away. This runs at every start of the service worker, so it
+// does not depend on onInstalled, and it does nothing once the old key is gone.
+chrome.storage.local.get("darkmode_auto").then(async (data) => {
+  if (data.darkmode_auto === undefined) return;
+  if (data.darkmode_auto === true) await chrome.storage.local.set({ darkmode_global: true });
+  await chrome.storage.local.remove("darkmode_auto");
+});
+
 function normalizeDomain(d) {
   if (!d) return "";
   return d.replace(/^\./, "").toLowerCase().trim();
