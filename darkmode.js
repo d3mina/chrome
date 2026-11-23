@@ -1,24 +1,30 @@
 (() => {
   const STYLE_ID = "superlevels-darkmode";
+  // Set by markPhotoBackgrounds() on elements that show a photo through a
+  // stylesheet background-image, which no CSS selector can find.
+  const PHOTO_ATTR = "data-superlevels-photo";
 
   // CSS approach: invert the whole page, then re-invert media so images/videos look normal
   function buildCSS(brightness) {
     const b = brightness / 100;
+    // A filter applies to the element and everything inside it, so media inside
+    // re-inverted media is inverted a third time: every photo in a <picture>
+    // (wired.com, seznam.cz) came out inverted. The :not() re-inverts only the
+    // outermost one. img, video, canvas and iframe show no child elements.
+    // An inline background counts only with an image in it (url): the shorthand
+    // "background: url(…)" was missed, and "background-image: none" on a layout
+    // block re-inverted the whole block to light.
+    const inlineBg = `[style*="background"][style*="url("]`;
+    const media = `img, video, canvas, svg image, picture, iframe, ${inlineBg}, [${PHOTO_ATTR}]`;
+    const wrappers = `picture, ${inlineBg}, [${PHOTO_ATTR}]`;
     return `
       html.superlevels-dark {
         filter: invert(1) hue-rotate(180deg) brightness(${b}) !important;
         background: #fff !important;
       }
-      html.superlevels-dark img,
-      html.superlevels-dark video,
-      html.superlevels-dark canvas,
-      html.superlevels-dark svg image,
-      html.superlevels-dark picture,
-      html.superlevels-dark [style*="background-image"],
-      html.superlevels-dark iframe {
+      html.superlevels-dark :is(${media}):not(:is(${wrappers}) *) {
         filter: invert(1) hue-rotate(180deg) !important;
       }
-      /* Don't double-invert nested media inside iframes - handled by iframe's own injection */
       /* Fix common elements that break */
       html.superlevels-dark input,
       html.superlevels-dark textarea,
@@ -39,10 +45,97 @@
       }
       style.textContent = buildCSS(brightness);
       document.documentElement.classList.add("superlevels-dark");
+      watchPhotoBackgrounds(true);
     } else {
       document.documentElement.classList.remove("superlevels-dark");
       if (style) style.remove();
+      watchPhotoBackgrounds(false);
     }
+  }
+
+  // ═══════════════════════════════════
+  //  Photos in stylesheet backgrounds
+  // ═══════════════════════════════════
+  // Many sites show thumbnails as a CSS background-image set by a class
+  // (idnes.cz: 87 photos), not as <img>. Find them and mark them for the
+  // re-invert rule. The same property also carries icons, sort arrows and
+  // spacer GIFs on big layout blocks, which must stay inverted, so only a
+  // background that looks like a photo counts.
+  function isPhotoBackground(el) {
+    if (el === document.body || el === document.documentElement) return false;
+    const cs = getComputedStyle(el);
+    const bg = cs.backgroundImage;
+    if (!bg.includes("url(")) return false;
+    // SVG is almost always an icon or a drawing, like inline <svg>.
+    if (/\.svg\b|image\/svg/i.test(bg)) return false;
+    // A photo is scaled to fill its box. Icons and patterns keep their own
+    // size ("auto") and sit at a position or repeat.
+    if (!/cover|contain|100%/.test(cs.backgroundSize)) return false;
+    // A block with a lot of text is layout with a decoration, not a picture.
+    // Re-inverting it would turn the whole block light again.
+    return el.textContent.length <= 300;
+  }
+
+  function checkPhotoBackground(el) {
+    if (isPhotoBackground(el)) {
+      if (!el.hasAttribute(PHOTO_ATTR)) el.setAttribute(PHOTO_ATTR, "");
+    } else if (el.hasAttribute(PHOTO_ATTR)) {
+      el.removeAttribute(PHOTO_ATTR);
+    }
+  }
+
+  let photoObserver = null;
+  let pendingTrees = new Set(); // added nodes: check them and all inside
+  let pendingEls = new Set(); // style or class changed: check the element only
+  let photoFrame = 0;
+
+  function flushPhotoChecks() {
+    photoFrame = 0;
+    const trees = pendingTrees, els = pendingEls;
+    pendingTrees = new Set();
+    pendingEls = new Set();
+    for (const root of trees) {
+      // While the page loads, the parser adds nodes one by one, so most queued
+      // roots sit inside another queued root. Check each subtree once.
+      if (!root.isConnected || hasQueuedAncestor(root, trees)) continue;
+      checkPhotoBackground(root);
+      for (const el of root.querySelectorAll("*")) checkPhotoBackground(el);
+    }
+    for (const el of els) if (el.isConnected) checkPhotoBackground(el);
+  }
+
+  function hasQueuedAncestor(el, set) {
+    for (let p = el.parentElement; p; p = p.parentElement) if (set.has(p)) return true;
+    return false;
+  }
+
+  // Batch the checks into one per frame: an SPA or a lazy loader changes many
+  // nodes at once. Runs only while the page is inverted.
+  function queuePhotoCheck(set, el) {
+    set.add(el);
+    if (!photoFrame) photoFrame = requestAnimationFrame(flushPhotoChecks);
+  }
+
+  function watchPhotoBackgrounds(on) {
+    if (!on) {
+      if (photoObserver) photoObserver.disconnect();
+      photoObserver = null;
+      return;
+    }
+    if (photoObserver) return;
+    photoObserver = new MutationObserver((records) => {
+      for (const r of records) {
+        if (r.type === "childList") {
+          for (const n of r.addedNodes) if (n.nodeType === 1) queuePhotoCheck(pendingTrees, n);
+        } else {
+          queuePhotoCheck(pendingEls, r.target);
+        }
+      }
+    });
+    photoObserver.observe(document.documentElement, {
+      childList: true, subtree: true, attributes: true, attributeFilter: ["style", "class"],
+    });
+    queuePhotoCheck(pendingTrees, document.documentElement);
   }
 
   function isDarkApplied() {

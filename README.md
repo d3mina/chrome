@@ -17,7 +17,7 @@ Before installing **any** extension — this one included — point an AI coding
 ## Features
 
 ### 🌙 Dark Mode
-Instant dark mode for any site via CSS filter inversion, with adjustable brightness. Images and videos are re-inverted so they still look normal.
+Instant dark mode for any site via CSS filter inversion, with adjustable brightness. Images and videos are re-inverted so they still look normal, also photos inside `<picture>` and photos that a site shows as a CSS background. Icons and drawings in CSS backgrounds stay inverted, so they stay visible on the dark page.
 
 Dark mode makes a page dark: it inverts only the pages that are light, and a site that already ships a dark theme stays as it is. To decide, it samples the page's real background colour at several points (not just `<body>`). Modern CSS colours (`color-mix()`, `oklch()` and the like) are read too. A page that shows no background and no text yet, such as an app that is still loading its theme, is left alone until it does, so a dark app like Discord is not inverted to white while it loads. Each verdict is cached per host, so the next visit applies it before first paint instead of flashing white.
 
