@@ -53,14 +53,17 @@
   const host = location.hostname;
   const storageKey = "darkmode_" + host;
   const globalKey = "darkmode_global";
-  const autoKey = "darkmode_auto";
+  // Verdict cache. The name is from the old "auto" mode; it stays so that the
+  // cached verdicts survive the update.
   const cacheKey = "darkmode_autocache";
   const CACHE_MAX = 400;
 
   let brightness = 100;
-  let autoEnabled = false;
-  let siteState; // per-site override: true / false / undefined (= no override)
-  let manualOverride = false; // user flipped the switch during this page load
+  // Dark mode is on for this page: the site's switch, else the all-sites
+  // default. "Dark" means the page ends up dark. Only a light page is
+  // inverted. A page that is already dark stays as it is, because inverting it
+  // turns it white (Discord with its dark theme).
+  let darkWanted = false;
 
   // ═══════════════════════════════════
   //  "Is this page light?" detection
@@ -146,7 +149,8 @@
     }
     if (votes.length) {
       const light = votes.filter(Boolean).length;
-      return light * 2 >= votes.length; // ties count as light
+      // A tie stays dark: inverting a half-dark page turns that half white.
+      return light * 2 > votes.length;
     }
 
     // Nothing opaque under the sample points — fall back to the page canvas.
@@ -185,15 +189,15 @@
   let lastVerdict; // avoids re-writing the cache on every re-check
   let retryTimer;
 
-  function runAutoCheck() {
-    if (!autoEnabled || manualOverride || siteState !== undefined) return;
+  function runCheck() {
+    if (!darkWanted) return;
     const light = detectLightPage();
     if (light === null) {
       // Leave the page as it is, cache nothing, and look again soon: an app can
       // paint its theme after every fixed check below has run. The time limit
       // (from navigation start) stops the retries on pages that stay empty.
       clearTimeout(retryTimer);
-      if (performance.now() < 10000) retryTimer = setTimeout(runAutoCheck, 250);
+      if (performance.now() < 10000) retryTimer = setTimeout(runCheck, 250);
       return;
     }
     if (light !== isDarkApplied()) applyDarkMode(light, brightness);
@@ -203,69 +207,52 @@
     }
   }
 
-  function scheduleAutoChecks() {
+  function scheduleChecks() {
     if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", runAutoCheck, { once: true });
+      document.addEventListener("DOMContentLoaded", runCheck, { once: true });
     } else {
-      runAutoCheck();
+      runCheck();
     }
-    window.addEventListener("load", runAutoCheck, { once: true });
-    setTimeout(runAutoCheck, 1500); // apps that paint their theme late
+    window.addEventListener("load", runCheck, { once: true });
+    setTimeout(runCheck, 1500); // apps that paint their theme late
+  }
+
+  // On: check the page now and while it loads, and invert it only if it is
+  // light. Never invert without a check, or a dark page turns white.
+  function setDarkWanted(on) {
+    darkWanted = on;
+    if (on) scheduleChecks();
+    else applyDarkMode(false, brightness);
   }
 
   // Load state as early as possible to prevent flash
-  chrome.storage.local.get(
-    [storageKey, globalKey, autoKey, cacheKey, "darkmode_brightness"],
-    (data) => {
-      brightness = data.darkmode_brightness || 100;
-      siteState = data[storageKey];
-      autoEnabled = data[autoKey] === true;
-
-      // An explicit per-site choice always wins, and stops auto-detection.
-      if (siteState !== undefined) {
-        if (siteState) applyDarkMode(true, brightness);
-        return;
-      }
-
-      // Auto mode: only invert pages that look light. Sits between the per-site
-      // override and the global default.
-      if (autoEnabled) {
-        const cached = (data[cacheKey] || {})[host];
-        if (cached && cached[0] === 1) applyDarkMode(true, brightness);
-        scheduleAutoChecks();
-        return;
-      }
-
-      if (data[globalKey]) applyDarkMode(true, brightness);
-    }
-  );
+  chrome.storage.local.get([storageKey, globalKey, cacheKey, "darkmode_brightness"], (data) => {
+    brightness = data.darkmode_brightness || 100;
+    // The site's own switch wins over the all-sites default.
+    const siteState = data[storageKey];
+    if (!(siteState !== undefined ? siteState : data[globalKey] === true)) return;
+    // The checks need a page they can measure. A page that was light on the
+    // last visit is inverted now, before first paint, so it does not flash white.
+    const cached = (data[cacheKey] || {})[host];
+    if (cached && cached[0] === 1) applyDarkMode(true, brightness);
+    setDarkWanted(true);
+  });
 
   // Listen for toggle messages from popup
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === "darkmode_toggle") {
       brightness = msg.brightness || brightness;
-      // A deliberate flip outranks auto-detection for the rest of this page load.
-      manualOverride = true;
-      applyDarkMode(msg.enabled, brightness);
+      if (msg.enabled && isDarkApplied()) applyDarkMode(true, brightness); // new brightness
+      setDarkWanted(msg.enabled === true);
       sendResponse({ ok: true });
     }
     if (msg.type === "darkmode_settings") {
-      // Auto mode / the per-site override changed in the popup — recompute from
-      // scratch. siteState comes as null when there is no override.
-      autoEnabled = msg.auto === true;
-      siteState = msg.siteState === null || msg.siteState === undefined ? undefined : msg.siteState;
+      // The site's switch was cleared in the popup: recompute from the stored
+      // settings. siteState comes as null when there is no override.
       brightness = msg.brightness || brightness;
-      manualOverride = false;
-      if (siteState !== undefined) applyDarkMode(siteState, brightness);
-      else if (autoEnabled) scheduleAutoChecks();
-      else applyDarkMode(msg.global === true, brightness);
+      const site = msg.siteState === null || msg.siteState === undefined ? undefined : msg.siteState;
+      setDarkWanted(site !== undefined ? site === true : msg.global === true);
       sendResponse({ ok: true });
-    }
-    if (msg.type === "darkmode_query") {
-      sendResponse({
-        active: isDarkApplied(),
-        host: host,
-      });
     }
   });
 })();
