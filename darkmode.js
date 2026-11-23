@@ -53,6 +53,32 @@
     }
   }
 
+  // On the first visit to a host no verdict is cached, so the page is not
+  // inverted before first paint, and a light page showed white until the first
+  // check (seznam.cz: about 0.6 s, its 1.4 MB of HTML delays DOMContentLoaded).
+  // Until a check decides, the veil hides the page on a black canvas, the same
+  // black that an inverted white page shows.
+  const VEIL_ID = "superlevels-darkmode-veil";
+  // The page can stay without a verdict (an app that has not loaded its theme
+  // yet, a page of only images). Show it after this time (ms from navigation
+  // start), so that the veil never hides a page for long.
+  const VEIL_MAX = 3000;
+
+  function setVeil(on) {
+    let veil = document.getElementById(VEIL_ID);
+    if (on && !veil) {
+      veil = document.createElement("style");
+      veil.id = VEIL_ID;
+      // opacity, not visibility: the checks use elementFromPoint() and
+      // checkVisibility(), and both skip hidden elements but not transparent
+      // ones. pageRootBackground() switches this sheet off for its read.
+      veil.textContent = "html { background: #000 !important } body { opacity: 0 !important }";
+      (document.head || document.documentElement).appendChild(veil);
+    } else if (!on && veil) {
+      veil.remove();
+    }
+  }
+
   // ═══════════════════════════════════
   //  Photos in stylesheet backgrounds
   // ═══════════════════════════════════
@@ -198,19 +224,21 @@
   }
 
   // The page's own <html> background. While the filter is on, our sheet paints
-  // <html> white (see buildCSS), so switch the sheet off for the read. Without
-  // this, a dark page that paints only <html> stayed inverted for good once its
-  // cache entry said "light". Off and on in the same task paints nothing, and a
-  // disabled sheet, unlike a class change, does not show in the page's own
-  // MutationObservers.
+  // <html> white (see buildCSS), and the veil paints it black, so switch both
+  // sheets off for the read. Without this, a dark page that paints only <html>
+  // stayed inverted for good once its cache entry said "light". Off and on in
+  // the same task paints nothing, and a disabled sheet, unlike a class change,
+  // does not show in the page's own MutationObservers.
   function pageRootBackground() {
-    const style = isDarkApplied() ? document.getElementById(STYLE_ID) : null;
-    const sheet = style && style.sheet;
-    if (sheet) sheet.disabled = true;
+    const sheets = [STYLE_ID, VEIL_ID]
+      .map((id) => document.getElementById(id))
+      .map((style) => style && style.sheet)
+      .filter(Boolean);
+    for (const sheet of sheets) sheet.disabled = true;
     try {
       return getComputedStyle(document.documentElement).backgroundColor;
     } finally {
-      if (sheet) sheet.disabled = false;
+      for (const sheet of sheets) sheet.disabled = false;
     }
   }
 
@@ -291,9 +319,12 @@
       // (from navigation start) stops the retries on pages that stay empty.
       clearTimeout(retryTimer);
       if (performance.now() < 10000) retryTimer = setTimeout(runCheck, 250);
+      if (performance.now() >= VEIL_MAX) setVeil(false);
       return;
     }
+    // In the same task as the invert, so no frame shows the page white.
     if (light !== isDarkApplied()) applyDarkMode(light, brightness);
+    setVeil(false);
     if (light !== lastVerdict) {
       lastVerdict = light;
       rememberVerdict(light);
@@ -314,8 +345,12 @@
   // light. Never invert without a check, or a dark page turns white.
   function setDarkWanted(on) {
     darkWanted = on;
-    if (on) scheduleChecks();
-    else applyDarkMode(false, brightness);
+    if (on) {
+      scheduleChecks();
+    } else {
+      applyDarkMode(false, brightness);
+      setVeil(false);
+    }
   }
 
   // Load state as early as possible to prevent flash
@@ -326,8 +361,10 @@
     if (!(siteState !== undefined ? siteState : data[globalKey] === true)) return;
     // The checks need a page they can measure. A page that was light on the
     // last visit is inverted now, before first paint, so it does not flash white.
+    // A page seen for the first time is veiled until the first check.
     const cached = (data[cacheKey] || {})[host];
     if (cached && cached[0] === 1) applyDarkMode(true, brightness);
+    else if (!cached) setVeil(true);
     setDarkWanted(true);
   });
 
