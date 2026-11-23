@@ -101,6 +101,23 @@
     return null;
   }
 
+  // The page's own <html> background. While the filter is on, our sheet paints
+  // <html> white (see buildCSS), so switch the sheet off for the read. Without
+  // this, a dark page that paints only <html> stayed inverted for good once its
+  // cache entry said "light". Off and on in the same task paints nothing, and a
+  // disabled sheet, unlike a class change, does not show in the page's own
+  // MutationObservers.
+  function pageRootBackground() {
+    const style = isDarkApplied() ? document.getElementById(STYLE_ID) : null;
+    const sheet = style && style.sheet;
+    if (sheet) sheet.disabled = true;
+    try {
+      return getComputedStyle(document.documentElement).backgroundColor;
+    } finally {
+      if (sheet) sheet.disabled = false;
+    }
+  }
+
   // True once the body shows any text. Script, style and <noscript> text is not
   // rendered, and checkVisibility() skips it. Stops at the first hit, so a huge
   // page costs no more than a small one.
@@ -135,11 +152,8 @@
     // Nothing opaque under the sample points — fall back to the page canvas.
     const bodyBg = document.body && parseColor(getComputedStyle(document.body).backgroundColor);
     if (bodyBg && bodyBg.a >= 0.9) return isLightColor(bodyBg);
-    // <html>'s background is ours while the filter is on, so only trust it otherwise.
-    if (!isDarkApplied()) {
-      const htmlBg = parseColor(getComputedStyle(document.documentElement).backgroundColor);
-      if (htmlBg && htmlBg.a >= 0.9) return isLightColor(htmlBg);
-    }
+    const htmlBg = parseColor(pageRootBackground());
+    if (htmlBg && htmlBg.a >= 0.9) return isLightColor(htmlBg);
     // A page that opts into dark rendering gets the benefit of the doubt.
     const scheme = getComputedStyle(document.documentElement).colorScheme || "";
     if (/\bdark\b/.test(scheme) && !/\blight\b/.test(scheme)) return false;
