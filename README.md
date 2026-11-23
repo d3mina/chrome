@@ -24,7 +24,7 @@ Dark mode makes a page dark: it inverts only the pages that are light, and a sit
 The popup has two switches. **All sites** turns dark mode on or off for every site, for example in the evening. The big switch is for the current site only: it overrides **All sites**, and the extension remembers it for that site until you press **Follow all sites**.
 
 ### 🚫 Cookie Banner Dismisser
-Hides cookie consent banners with CSS and auto-clicks the accept button for the common consent frameworks — OneTrust, CookieBot, Didomi, Quantcast, Termly, TrustArc, the WordPress GDPR plugins, and dozens more. Also unsticks the `overflow: hidden` these banners leave on `<body>`. Toggle it off if a site breaks.
+Hides cookie consent banners with CSS and auto-clicks the accept button for the common consent frameworks — OneTrust, CookieBot, Didomi, Fides, Quantcast, Termly, TrustArc, the WordPress GDPR plugins, and dozens more. Also unsticks the `overflow: hidden` these banners leave on `<body>`. Toggle it off if a site breaks.
 
 ### ✉️ Gmail Yellow Importance Marker
 Gmail's September 2026 update recoloured the "important" marker from yellow to blue. This puts it back, by overriding the CSS variable Gmail fills the marker from.

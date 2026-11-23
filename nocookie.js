@@ -46,6 +46,12 @@
     .termly-consent-banner, #termly-code-snippet-support,
     .CybotCookiebotDialog, #CybotCookiebotDialog,
     #CybotCookiebotDialogBodyUnderlay,
+    /* Fides (wired.com and other Conde Nast sites). Hide only the banner
+       and the full-page overlay that Fides adds while the banner is open.
+       #fides-modal also has a .fides-modal-overlay, but it is not a direct
+       child of the wrapper: keep it, so the site's "Your privacy choices"
+       link still opens the settings dialog. */
+    #fides-banner-container, #fides-overlay-wrapper > .fides-modal-overlay,
     .cmplz-cookiebanner, #cmplz-cookiebanner-container {
       display: none !important;
       visibility: hidden !important;
@@ -64,7 +70,8 @@
     html.sp-message-open,
     html.cookie-consent-open,
     body.ot-overflow-hidden,
-    html.ot-overflow-hidden {
+    html.ot-overflow-hidden,
+    body.fides-no-scroll {
       overflow: auto !important;
       position: static !important;
     }
