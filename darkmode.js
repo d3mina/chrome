@@ -64,30 +64,43 @@
     }
   }
 
-  // On the first visit to a host no verdict is cached, so the page is not
-  // inverted before first paint, and a light page showed white until the first
-  // check (seznam.cz: about 0.6 s, its 1.4 MB of HTML delays DOMContentLoaded).
-  // Until a check decides, the veil hides the page on a black canvas, the same
-  // black that an inverted white page shows.
+  // Until a check decides, a page that is not inverted can show white. The veil
+  // keeps it dark, in black, the same black that an inverted white page shows.
+  // pageRootBackground() switches the veil off for its read.
   const VEIL_ID = "superlevels-darkmode-veil";
+  const VEIL_CSS = {
+    // First visit to a host: no verdict is cached, so the page can be light,
+    // and a light page showed white until the first check (seznam.cz: about
+    // 0.6 s, its 1.4 MB of HTML delays DOMContentLoaded). Hide the page.
+    // opacity, not visibility: the checks use elementFromPoint() and
+    // checkVisibility(), and both skip hidden elements but not transparent ones.
+    hide: "html { background: #000 !important } body { opacity: 0 !important }",
+    // Dark on the last visit: show the page, and paint only the canvas, which
+    // is white while a page has no background. Discord's shell has none until
+    // its theme loads after the load event. Zero specificity and no !important,
+    // so any <html> background of the page wins. A page that paints only
+    // <body> shows that colour on the body box only, until the check.
+    canvas: ":where(html) { background-color: #000 }",
+  };
   // The page can stay without a verdict (an app that has not loaded its theme
-  // yet, a page of only images). Show it after this time (ms from navigation
-  // start), so that the veil never hides a page for long.
+  // yet, a page of only images). After this time (ms from navigation start)
+  // "hide" becomes "canvas", so that the veil never hides a page for long.
   const VEIL_MAX = 3000;
 
-  function setVeil(on) {
+  // kind: "hide", "canvas", or false for no veil
+  function setVeil(kind) {
     let veil = document.getElementById(VEIL_ID);
-    if (on && !veil) {
+    if (!kind) {
+      if (veil) veil.remove();
+      return;
+    }
+    if (!veil) {
       veil = document.createElement("style");
       veil.id = VEIL_ID;
-      // opacity, not visibility: the checks use elementFromPoint() and
-      // checkVisibility(), and both skip hidden elements but not transparent
-      // ones. pageRootBackground() switches this sheet off for its read.
-      veil.textContent = "html { background: #000 !important } body { opacity: 0 !important }";
       (document.head || document.documentElement).appendChild(veil);
-    } else if (!on && veil) {
-      veil.remove();
     }
+    // The retries call this every 250 ms. Rewrite the sheet only on a change.
+    if (veil.textContent !== VEIL_CSS[kind]) veil.textContent = VEIL_CSS[kind];
   }
 
   // ═══════════════════════════════════
@@ -410,7 +423,8 @@
       // (from navigation start) stops the retries on pages that stay empty.
       clearTimeout(retryTimer);
       if (performance.now() < 10000) retryTimer = setTimeout(runCheck, 250);
-      if (performance.now() >= VEIL_MAX) setVeil(false);
+      // Show a page that still has no verdict, but keep its empty canvas dark.
+      if (performance.now() >= VEIL_MAX && document.getElementById(VEIL_ID)) setVeil("canvas");
       return;
     }
     // In the same task as the invert, so no frame shows the page white.
@@ -452,10 +466,10 @@
     if (!(siteState !== undefined ? siteState : data[globalKey] === true)) return;
     // The checks need a page they can measure. A page that was light on the
     // last visit is inverted now, before first paint, so it does not flash white.
-    // A page seen for the first time is veiled until the first check.
+    // Any other page is veiled until the first check.
     const cached = (data[cacheKey] || {})[host];
     if (cached && cached[0] === 1) applyDarkMode(true, brightness);
-    else if (!cached) setVeil(true);
+    else setVeil(cached ? "canvas" : "hide");
     setDarkWanted(true);
   });
 
