@@ -1,30 +1,41 @@
 (() => {
   const STYLE_ID = "superlevels-darkmode";
-  // Set by markPhotoBackgrounds() on elements that show a photo through a
+  // Set by checkPhotoBackground() on elements that show a photo through a
   // stylesheet background-image, which no CSS selector can find.
   const PHOTO_ATTR = "data-superlevels-photo";
+
+  // A filter applies to the element and everything inside it, so media inside
+  // re-inverted media is inverted a third time: every photo in a <picture>
+  // (wired.com, seznam.cz) came out inverted. The :not() re-inverts only the
+  // outermost one. img, video, canvas and iframe show no child elements.
+  // An inline background counts only with an image in it (url): the shorthand
+  // "background: url(…)" was missed, and "background-image: none" on a layout
+  // block re-inverted the whole block to light.
+  const INLINE_BG = `[style*="background"][style*="url("]`;
+  const MEDIA = `img, video, canvas, svg image, picture, iframe, ${INLINE_BG}, [${PHOTO_ATTR}]`;
+  const WRAPPERS = `picture, ${INLINE_BG}, [${PHOTO_ATTR}]`;
+  const OUTER_MEDIA = `:is(${MEDIA}):not(:is(${WRAPPERS}) *)`;
+  // The :not() sees only ancestors in the element's own tree. It misses a
+  // wrapper outside a shadow root, and a wrapper in a shadow root that holds
+  // the <slot> of a page element. The shadow root sheet (below) sets
+  // --superlevels-media to "none" there. Custom properties pass into shadow
+  // roots and slots on the same path as filters, so the media below such a
+  // wrapper gets no second re-invert. Everywhere else the property is not set,
+  // and var() uses the re-invert. Do not declare the property on <html>:
+  // then each switch of the dark class restyles every element of the page
+  // (Wikipedia, 17,000 elements: 63 ms instead of 7 ms).
+  const REINVERT = `filter: var(--superlevels-media, invert(1) hue-rotate(180deg)) !important;`;
+  const WRAPPED = `--superlevels-media: none;`;
 
   // CSS approach: invert the whole page, then re-invert media so images/videos look normal
   function buildCSS(brightness) {
     const b = brightness / 100;
-    // A filter applies to the element and everything inside it, so media inside
-    // re-inverted media is inverted a third time: every photo in a <picture>
-    // (wired.com, seznam.cz) came out inverted. The :not() re-inverts only the
-    // outermost one. img, video, canvas and iframe show no child elements.
-    // An inline background counts only with an image in it (url): the shorthand
-    // "background: url(…)" was missed, and "background-image: none" on a layout
-    // block re-inverted the whole block to light.
-    const inlineBg = `[style*="background"][style*="url("]`;
-    const media = `img, video, canvas, svg image, picture, iframe, ${inlineBg}, [${PHOTO_ATTR}]`;
-    const wrappers = `picture, ${inlineBg}, [${PHOTO_ATTR}]`;
     return `
       html.superlevels-dark {
         filter: invert(1) hue-rotate(180deg) brightness(${b}) !important;
         background: #fff !important;
       }
-      html.superlevels-dark :is(${media}):not(:is(${wrappers}) *) {
-        filter: invert(1) hue-rotate(180deg) !important;
-      }
+      html.superlevels-dark ${OUTER_MEDIA} { ${REINVERT} }
       /* Fix common elements that break */
       html.superlevels-dark input,
       html.superlevels-dark textarea,
@@ -110,6 +121,77 @@
     }
   }
 
+  // ═══════════════════════════════════
+  //  Media in shadow roots
+  // ═══════════════════════════════════
+  // The page's stylesheet cannot select elements inside a shadow root, but the
+  // filter on <html> inverts them too. So the <video> of a web component
+  // player stayed inverted (<mux-video> on media-chrome.org; superlevels saw it
+  // on Reddit), and so did the photo in a Shoelace <sl-avatar>. Each shadow root
+  // gets the same re-invert rule in its own sheet. :host-context() ties the
+  // rule to the same <html> class as the page rule, so the two always switch on
+  // and off together.
+  // The second rule marks what a wrapper re-inverted already (see REINVERT):
+  // the whole shadow root when the host is a wrapper or sits in one, and the
+  // children of a wrapper in the shadow root, which hold its slots and inner
+  // shadow hosts. Both set the property on children (> *), not on the wrapper
+  // or host: var() reads the element's own value, and a wrapper needs its
+  // re-invert.
+  const shadowSheet = new CSSStyleSheet();
+  shadowSheet.replaceSync(`
+    :host-context(html.superlevels-dark) ${OUTER_MEDIA} { ${REINVERT} }
+    :host-context(:is(${WRAPPERS})) > *, :is(${WRAPPERS}) > * { ${WRAPPED} }
+  `);
+
+  let watchedRoots = new WeakSet();
+
+  function watchShadowRoot(el) {
+    // The call throws for an SVG element (which can have no shadow root), and
+    // the throw stopped all checks on pages with SVG icons.
+    if (!(el instanceof HTMLElement)) return;
+    // Closed shadow roots too. The browser's own ones (video controls,
+    // inputs) never come back, so the sheet stays out of them.
+    const root = chrome.dom.openOrClosedShadowRoot(el);
+    if (!root || watchedRoots.has(root)) return;
+    watchedRoots.add(root);
+    if (!root.adoptedStyleSheets.includes(shadowSheet)) {
+      root.adoptedStyleSheets = [...root.adoptedStyleSheets, shadowSheet];
+    }
+    // The page's observer does not see into a shadow root. Watch the root too,
+    // for photo backgrounds and for shadow roots inside it.
+    photoObserver.observe(root, OBSERVE);
+    for (const child of root.children) queuePhotoCheck(pendingTrees, child);
+  }
+
+  // A custom element can be in the page before the site's script defines its
+  // class. It gets its shadow root at the upgrade, and no observer reports
+  // that, so the player stayed inverted. Look at such elements again until the
+  // browser marks them :defined. Built-in elements are always :defined.
+  const undefinedEls = new Set();
+  let upgradeTimer = 0;
+
+  function checkUpgrades() {
+    upgradeTimer = 0;
+    for (const el of undefinedEls) {
+      if (!el.isConnected) undefinedEls.delete(el);
+      else if (el.matches(":defined")) {
+        undefinedEls.delete(el);
+        watchShadowRoot(el);
+      }
+    }
+    if (undefinedEls.size) upgradeTimer = setTimeout(checkUpgrades, 500);
+  }
+
+  function checkElement(el) {
+    checkPhotoBackground(el);
+    watchShadowRoot(el);
+    if (el.matches(":not(:defined)")) {
+      undefinedEls.add(el);
+      if (!upgradeTimer) upgradeTimer = setTimeout(checkUpgrades, 500);
+    }
+  }
+
+  const OBSERVE = { childList: true, subtree: true, attributes: true, attributeFilter: ["style", "class"] };
   let photoObserver = null;
   let pendingTrees = new Set(); // added nodes: check them and all inside
   let pendingEls = new Set(); // style or class changed: check the element only
@@ -124,10 +206,10 @@
       // While the page loads, the parser adds nodes one by one, so most queued
       // roots sit inside another queued root. Check each subtree once.
       if (!root.isConnected || hasQueuedAncestor(root, trees)) continue;
-      checkPhotoBackground(root);
-      for (const el of root.querySelectorAll("*")) checkPhotoBackground(el);
+      checkElement(root);
+      for (const el of root.querySelectorAll("*")) checkElement(el);
     }
-    for (const el of els) if (el.isConnected) checkPhotoBackground(el);
+    for (const el of els) if (el.isConnected) checkElement(el);
   }
 
   function hasQueuedAncestor(el, set) {
@@ -146,6 +228,14 @@
     if (!on) {
       if (photoObserver) photoObserver.disconnect();
       photoObserver = null;
+      // Queued checks need the observer, which is gone now.
+      cancelAnimationFrame(photoFrame);
+      photoFrame = 0;
+      pendingTrees.clear();
+      pendingEls.clear();
+      clearTimeout(upgradeTimer);
+      upgradeTimer = 0;
+      undefinedEls.clear();
       return;
     }
     if (photoObserver) return;
@@ -158,9 +248,10 @@
         }
       }
     });
-    photoObserver.observe(document.documentElement, {
-      childList: true, subtree: true, attributes: true, attributeFilter: ["style", "class"],
-    });
+    // A new observer watches no shadow root yet. The full check below finds
+    // them all again.
+    watchedRoots = new WeakSet();
+    photoObserver.observe(document.documentElement, OBSERVE);
     queuePhotoCheck(pendingTrees, document.documentElement);
   }
 
