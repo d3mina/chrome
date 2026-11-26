@@ -14,7 +14,7 @@
   },
   "content_scripts": [{
     "matches": ["<all_urls>"],
-    "js": ["darkmode.js", "nocookie.js"],
+    "js": ["darkmode-schedule.js", "darkmode.js", "nocookie.js"],
     "run_at": "document_start"
   }, {
     "matches": ["*://mail.google.com/*"],

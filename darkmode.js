@@ -282,11 +282,29 @@
   const CACHE_MAX = 400;
 
   let brightness = 100;
+  // Per-site override (true / false / undefined = follow All sites).
+  let siteState;
+  // All-sites mode: true (ON), false/undefined (OFF), or "auto" (Prague daylight).
+  let globalSetting;
   // Dark mode is on for this page: the site's switch, else the all-sites
   // default. "Dark" means the page ends up dark. Only a light page is
   // inverted. A page that is already dark stays as it is, because inverting it
   // turns it white (Discord with its dark theme).
   let darkWanted = false;
+  let scheduleTimer = 0;
+  let scheduleListenersBound = false;
+
+  // Cap the visible tab's timer at 5 min so waking a sleeping laptop or
+  // changing the clock updates promptly; hidden tabs only set a single-shot
+  // timer for the actual transition (zero periodic wakeups in the background).
+  const SCHEDULE_TICK_CAP_MS = 5 * 60 * 1000;
+
+  function computeDarkWanted(now = Date.now()) {
+    // The site's own switch always wins over All sites (including Auto).
+    if (siteState !== undefined) return siteState === true;
+    if (globalSetting === "auto") return darkmodeSchedule.getState(now).isDark;
+    return globalSetting === true;
+  }
 
   // ═══════════════════════════════════
   //  "Is this page light?" detection
@@ -453,17 +471,76 @@
     if (on) {
       scheduleChecks();
     } else {
+      clearTimeout(retryTimer);
+      retryTimer = 0;
       applyDarkMode(false, brightness);
       setVeil(false);
+    }
+  }
+
+  function onScheduleTick() {
+    scheduleTimer = 0;
+    syncState();
+  }
+
+  function onVisibilityChange() {
+    // Going hidden drops the 5-min cap in favor of a single-shot timer at the
+    // next transition; becoming visible re-checks immediately (catches sleep/freeze).
+    if (document.visibilityState === "hidden") updateScheduleWatcher();
+    else syncState();
+  }
+
+  function onWindowFocus() {
+    syncState();
+  }
+
+  // Only keep timers/listeners active when Auto is actually governing this tab.
+  function updateScheduleWatcher() {
+    clearTimeout(scheduleTimer);
+    scheduleTimer = 0;
+    const needsWatch = siteState === undefined && globalSetting === "auto";
+    if (!needsWatch) {
+      if (scheduleListenersBound) {
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+        window.removeEventListener("focus", onWindowFocus);
+        scheduleListenersBound = false;
+      }
+      return;
+    }
+    if (!scheduleListenersBound) {
+      document.addEventListener("visibilitychange", onVisibilityChange);
+      window.addEventListener("focus", onWindowFocus);
+      scheduleListenersBound = true;
+    }
+    const now = Date.now();
+    const { nextChange } = darkmodeSchedule.getState(now);
+    // +500 ms ensures we land strictly past the sunset / sunrise+1h boundary
+    // even if the browser fires the timer slightly early.
+    const untilChange = Math.max(1000, nextChange - now + 500);
+    const delay = document.visibilityState === "hidden"
+      ? untilChange
+      : Math.min(untilChange, SCHEDULE_TICK_CAP_MS);
+    scheduleTimer = setTimeout(onScheduleTick, delay);
+  }
+
+  function syncState(brightnessChanged = false) {
+    updateScheduleWatcher();
+    const wanted = computeDarkWanted();
+    if (wanted !== darkWanted) {
+      setDarkWanted(wanted);
+    } else if (brightnessChanged && wanted && isDarkApplied()) {
+      applyDarkMode(true, brightness);
     }
   }
 
   // Load state as early as possible to prevent flash
   chrome.storage.local.get([storageKey, globalKey, cacheKey, "darkmode_brightness"], (data) => {
     brightness = data.darkmode_brightness || 100;
-    // The site's own switch wins over the all-sites default.
-    const siteState = data[storageKey];
-    if (!(siteState !== undefined ? siteState : data[globalKey] === true)) return;
+    siteState = data[storageKey];
+    globalSetting = data[globalKey];
+    const wanted = computeDarkWanted();
+    updateScheduleWatcher();
+    if (!wanted) return;
     // The checks need a page they can measure. A page that was light on the
     // last visit is inverted now, before first paint, so it does not flash white.
     // Any other page is veiled until the first check.
@@ -473,23 +550,25 @@
     setDarkWanted(true);
   });
 
-  // Listen for toggle messages from popup
-  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    if (msg.type === "darkmode_toggle") {
-      brightness = msg.brightness || brightness;
-      if (msg.enabled && isDarkApplied()) applyDarkMode(true, brightness); // new brightness
-      setDarkWanted(msg.enabled === true);
-      sendResponse({ ok: true });
+  // React live across all open tabs when settings change in storage —
+  // no per-tab messaging needed (same pattern as gmailfix.js and keynav.js).
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local") return;
+    let relevant = false;
+    let brightnessChanged = false;
+    if (storageKey in changes) {
+      siteState = changes[storageKey].newValue;
+      relevant = true;
     }
-    if (msg.type === "darkmode_settings") {
-      // The popup changed a setting (auto switch, site switch cleared,
-      // brightness): recompute from the stored settings. siteState comes as
-      // null when there is no override.
-      brightness = msg.brightness || brightness;
-      if (isDarkApplied()) applyDarkMode(true, brightness); // new brightness
-      const site = msg.siteState === null || msg.siteState === undefined ? undefined : msg.siteState;
-      setDarkWanted(site !== undefined ? site === true : msg.global === true);
-      sendResponse({ ok: true });
+    if (globalKey in changes) {
+      globalSetting = changes[globalKey].newValue;
+      relevant = true;
     }
+    if ("darkmode_brightness" in changes) {
+      brightness = changes.darkmode_brightness.newValue || 100;
+      brightnessChanged = true;
+      relevant = true;
+    }
+    if (relevant) syncState(brightnessChanged);
   });
 })();
