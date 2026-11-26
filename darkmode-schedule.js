@@ -46,12 +46,8 @@
     /* Dec */ [904, 903, 903, 902, 902, 901, 901, 901, 900, 900, 900, 900, 900, 900, 900, 900, 901, 901, 901, 902, 902, 902, 903, 904, 904, 905, 906, 906, 907, 908, 909],
   ];
 
-  const pragueTimeFmt = new Intl.DateTimeFormat("en-GB", {
-    timeZone: PRAGUE_TZ,
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  });
+  // Lazy: web pages only need getState() at document_start; only popup.js formats times.
+  let pragueTimeFmt;
 
   // Returns { sunrise, sunset } in Unix epoch ms for the given UTC calendar day.
   // Date.UTC normalizes out-of-range days (e.g. day - 1 on Jan 1, day + 1 on Dec 31).
@@ -113,6 +109,14 @@
   }
 
   function formatPragueTime(ms) {
+    if (!pragueTimeFmt) {
+      pragueTimeFmt = new Intl.DateTimeFormat("en-GB", {
+        timeZone: PRAGUE_TZ,
+        hour: "2-digit",
+        minute: "2-digit",
+        hourCycle: "h23",
+      });
+    }
     return pragueTimeFmt.format(ms);
   }
 

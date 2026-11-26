@@ -294,9 +294,10 @@
   let scheduleTimer = 0;
   let scheduleListenersBound = false;
 
-  // Cap the auto-schedule timer at 60 s so waking a sleeping laptop or
-  // changing the clock updates open tabs promptly without fast polling.
-  const SCHEDULE_TICK_CAP_MS = 60 * 1000;
+  // Cap the visible tab's timer at 5 min so waking a sleeping laptop or
+  // changing the clock updates promptly; hidden tabs only set a single-shot
+  // timer for the actual transition (zero periodic wakeups in the background).
+  const SCHEDULE_TICK_CAP_MS = 5 * 60 * 1000;
 
   function computeDarkWanted(now = Date.now()) {
     // The site's own switch always wins over All sites (including Auto).
@@ -482,8 +483,14 @@
     syncState();
   }
 
-  function onScheduleWake() {
-    if (document.visibilityState === "hidden") return;
+  function onVisibilityChange() {
+    // Going hidden drops the 5-min cap in favor of a single-shot timer at the
+    // next transition; becoming visible re-checks immediately (catches sleep/freeze).
+    if (document.visibilityState === "hidden") updateScheduleWatcher();
+    else syncState();
+  }
+
+  function onWindowFocus() {
     syncState();
   }
 
@@ -494,22 +501,25 @@
     const needsWatch = siteState === undefined && globalSetting === "auto";
     if (!needsWatch) {
       if (scheduleListenersBound) {
-        document.removeEventListener("visibilitychange", onScheduleWake);
-        window.removeEventListener("focus", onScheduleWake);
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+        window.removeEventListener("focus", onWindowFocus);
         scheduleListenersBound = false;
       }
       return;
     }
     if (!scheduleListenersBound) {
-      document.addEventListener("visibilitychange", onScheduleWake);
-      window.addEventListener("focus", onScheduleWake);
+      document.addEventListener("visibilitychange", onVisibilityChange);
+      window.addEventListener("focus", onWindowFocus);
       scheduleListenersBound = true;
     }
     const now = Date.now();
     const { nextChange } = darkmodeSchedule.getState(now);
     // +500 ms ensures we land strictly past the sunset / sunrise+1h boundary
     // even if the browser fires the timer slightly early.
-    const delay = Math.max(1000, Math.min(nextChange - now + 500, SCHEDULE_TICK_CAP_MS));
+    const untilChange = Math.max(1000, nextChange - now + 500);
+    const delay = document.visibilityState === "hidden"
+      ? untilChange
+      : Math.min(untilChange, SCHEDULE_TICK_CAP_MS);
     scheduleTimer = setTimeout(onScheduleTick, delay);
   }
 
@@ -540,7 +550,8 @@
     setDarkWanted(true);
   });
 
-  // React live across all open tabs when settings change in storage.
+  // React live across all open tabs when settings change in storage —
+  // no per-tab messaging needed (same pattern as gmailfix.js and keynav.js).
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
     let relevant = false;
@@ -559,29 +570,5 @@
       relevant = true;
     }
     if (relevant) syncState(brightnessChanged);
-  });
-
-  // Listen for toggle messages from popup
-  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-    if (msg.type === "darkmode_toggle") {
-      const nextBrightness = msg.brightness || brightness;
-      const brightnessChanged = nextBrightness !== brightness;
-      brightness = nextBrightness;
-      siteState = msg.enabled === true;
-      syncState(brightnessChanged);
-      sendResponse({ ok: true });
-    }
-    if (msg.type === "darkmode_settings") {
-      // The popup changed a setting (all-sites mode, site switch cleared,
-      // brightness): recompute from the stored settings. siteState comes as
-      // null when there is no override.
-      const nextBrightness = msg.brightness || brightness;
-      const brightnessChanged = nextBrightness !== brightness;
-      brightness = nextBrightness;
-      siteState = msg.siteState === null || msg.siteState === undefined ? undefined : msg.siteState;
-      globalSetting = msg.global;
-      syncState(brightnessChanged);
-      sendResponse({ ok: true });
-    }
   });
 })();
