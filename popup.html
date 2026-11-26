@@ -75,6 +75,7 @@
     }
     .big-switch input:checked + .big-slider { background: #e94560; }
     .big-switch input:checked + .big-slider::before { transform: translateX(26px); }
+    .big-switch input:disabled + .big-slider { opacity: 0.4; cursor: default; }
     .status { font-size: 14px; font-weight: 600; }
     .status.on { color: #e94560; }
     .status.off { color: #555; }
@@ -82,12 +83,36 @@
     /* ── Dark Mode ── */
     .dark-big-toggle {
       display: flex; flex-direction: column; align-items: center;
-      padding: 24px 0 20px; gap: 12px;
+      padding: 18px 0 14px; gap: 10px;
     }
-    .dark-big-toggle .moon { font-size: 48px; line-height: 1; }
+    .dark-big-toggle .moon { font-size: 46px; line-height: 1; }
     .dark-host {
       text-align: center; font-size: 12px; color: #666;
-      margin-bottom: 16px;
+      margin-bottom: 12px;
+    }
+    .dark-global-info {
+      flex: 1; min-width: 0; padding-right: 12px;
+    }
+    .dark-schedule-status {
+      font-size: 11px; color: #aaa; margin-top: 4px; line-height: 1.4;
+    }
+    .dark-schedule-status .state-on { color: #e94560; font-weight: 600; }
+    .dark-schedule-status .state-off { color: #888; font-weight: 600; }
+    .segmented {
+      display: inline-flex; flex-shrink: 0;
+      background: #0f0f23; border: 1px solid #2a2a4a;
+      border-radius: 6px; padding: 2px;
+    }
+    .segmented button {
+      padding: 6px 12px; border: none; background: none;
+      color: #888; border-radius: 4px;
+      font-size: 12px; font-weight: 600;
+      cursor: pointer; transition: all 0.15s;
+    }
+    .segmented button:hover { color: #ccc; }
+    .segmented button:focus { outline: none; }
+    .segmented button.active {
+      background: #e94560; color: #fff;
     }
     .dark-section {
       padding: 10px 12px; background: #16213e;
@@ -202,19 +227,21 @@
       <div class="dark-host" id="darkHost"></div>
 
       <!-- The big switch above is for this site only (darkmode_<host>).
-           This switch is the default for every site (darkmode_global). -->
+           This control sets the default for every site (darkmode_global):
+           false (Off), "auto" (Prague sunset to 1h after sunrise), or true (On). -->
       <div class="cc-row">
-        <div>
+        <div class="dark-global-info">
           <div class="cc-label">All sites</div>
-          <div class="cc-sub">
-            Dark mode on every site, for example in the evening.
-            The switch of a site above overrides this one.
+          <div class="cc-sub" id="darkGlobalSub">
+            Default for every site. The switch above overrides it for this site.
           </div>
+          <div class="dark-schedule-status" id="darkScheduleStatus" hidden></div>
         </div>
-        <label class="big-switch">
-          <input type="checkbox" id="darkGlobalToggle">
-          <span class="big-slider"></span>
-        </label>
+        <div class="segmented" id="darkGlobalMode" role="radiogroup" aria-label="All sites dark mode">
+          <button type="button" data-mode="off" role="radio" aria-checked="true">Off</button>
+          <button type="button" data-mode="auto" role="radio" aria-checked="false">Auto</button>
+          <button type="button" data-mode="on" role="radio" aria-checked="false">On</button>
+        </div>
       </div>
 
       <div class="dark-section">
@@ -399,6 +426,7 @@
     </div>
   </div>
 
+  <script src="darkmode-schedule.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

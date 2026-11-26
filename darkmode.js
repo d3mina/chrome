@@ -282,11 +282,28 @@
   const CACHE_MAX = 400;
 
   let brightness = 100;
+  // Per-site override (true / false / undefined = follow All sites).
+  let siteState;
+  // All-sites mode: true (ON), false/undefined (OFF), or "auto" (Prague daylight).
+  let globalSetting;
   // Dark mode is on for this page: the site's switch, else the all-sites
   // default. "Dark" means the page ends up dark. Only a light page is
   // inverted. A page that is already dark stays as it is, because inverting it
   // turns it white (Discord with its dark theme).
   let darkWanted = false;
+  let scheduleTimer = 0;
+  let scheduleListenersBound = false;
+
+  // Cap the auto-schedule timer at 60 s so waking a sleeping laptop or
+  // changing the clock updates open tabs promptly without fast polling.
+  const SCHEDULE_TICK_CAP_MS = 60 * 1000;
+
+  function computeDarkWanted(now = Date.now()) {
+    // The site's own switch always wins over All sites (including Auto).
+    if (siteState !== undefined) return siteState === true;
+    if (globalSetting === "auto") return darkmodeSchedule.getState(now).isDark;
+    return globalSetting === true;
+  }
 
   // ═══════════════════════════════════
   //  "Is this page light?" detection
@@ -453,17 +470,67 @@
     if (on) {
       scheduleChecks();
     } else {
+      clearTimeout(retryTimer);
+      retryTimer = 0;
       applyDarkMode(false, brightness);
       setVeil(false);
+    }
+  }
+
+  function onScheduleTick() {
+    scheduleTimer = 0;
+    syncState();
+  }
+
+  function onScheduleWake() {
+    if (document.visibilityState === "hidden") return;
+    syncState();
+  }
+
+  // Only keep timers/listeners active when Auto is actually governing this tab.
+  function updateScheduleWatcher() {
+    clearTimeout(scheduleTimer);
+    scheduleTimer = 0;
+    const needsWatch = siteState === undefined && globalSetting === "auto";
+    if (!needsWatch) {
+      if (scheduleListenersBound) {
+        document.removeEventListener("visibilitychange", onScheduleWake);
+        window.removeEventListener("focus", onScheduleWake);
+        scheduleListenersBound = false;
+      }
+      return;
+    }
+    if (!scheduleListenersBound) {
+      document.addEventListener("visibilitychange", onScheduleWake);
+      window.addEventListener("focus", onScheduleWake);
+      scheduleListenersBound = true;
+    }
+    const now = Date.now();
+    const { nextChange } = darkmodeSchedule.getState(now);
+    // +500 ms ensures we land strictly past the sunset / sunrise+1h boundary
+    // even if the browser fires the timer slightly early.
+    const delay = Math.max(1000, Math.min(nextChange - now + 500, SCHEDULE_TICK_CAP_MS));
+    scheduleTimer = setTimeout(onScheduleTick, delay);
+  }
+
+  function syncState(brightnessChanged = false) {
+    updateScheduleWatcher();
+    const wanted = computeDarkWanted();
+    if (wanted !== darkWanted) {
+      setDarkWanted(wanted);
+    } else if (brightnessChanged && wanted && isDarkApplied()) {
+      applyDarkMode(true, brightness);
     }
   }
 
   // Load state as early as possible to prevent flash
   chrome.storage.local.get([storageKey, globalKey, cacheKey, "darkmode_brightness"], (data) => {
     brightness = data.darkmode_brightness || 100;
-    // The site's own switch wins over the all-sites default.
-    const siteState = data[storageKey];
-    if (!(siteState !== undefined ? siteState : data[globalKey] === true)) return;
+    siteState = data[storageKey];
+    globalSetting = data[globalKey];
+    const wanted = computeDarkWanted();
+    updateScheduleWatcher();
+    if (!wanted) return;
     // The checks need a page they can measure. A page that was light on the
     // last visit is inverted now, before first paint, so it does not flash white.
     // Any other page is veiled until the first check.
@@ -473,22 +540,47 @@
     setDarkWanted(true);
   });
 
+  // React live across all open tabs when settings change in storage.
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area !== "local") return;
+    let relevant = false;
+    let brightnessChanged = false;
+    if (storageKey in changes) {
+      siteState = changes[storageKey].newValue;
+      relevant = true;
+    }
+    if (globalKey in changes) {
+      globalSetting = changes[globalKey].newValue;
+      relevant = true;
+    }
+    if ("darkmode_brightness" in changes) {
+      brightness = changes.darkmode_brightness.newValue || 100;
+      brightnessChanged = true;
+      relevant = true;
+    }
+    if (relevant) syncState(brightnessChanged);
+  });
+
   // Listen for toggle messages from popup
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === "darkmode_toggle") {
-      brightness = msg.brightness || brightness;
-      if (msg.enabled && isDarkApplied()) applyDarkMode(true, brightness); // new brightness
-      setDarkWanted(msg.enabled === true);
+      const nextBrightness = msg.brightness || brightness;
+      const brightnessChanged = nextBrightness !== brightness;
+      brightness = nextBrightness;
+      siteState = msg.enabled === true;
+      syncState(brightnessChanged);
       sendResponse({ ok: true });
     }
     if (msg.type === "darkmode_settings") {
-      // The popup changed a setting (auto switch, site switch cleared,
+      // The popup changed a setting (all-sites mode, site switch cleared,
       // brightness): recompute from the stored settings. siteState comes as
       // null when there is no override.
-      brightness = msg.brightness || brightness;
-      if (isDarkApplied()) applyDarkMode(true, brightness); // new brightness
-      const site = msg.siteState === null || msg.siteState === undefined ? undefined : msg.siteState;
-      setDarkWanted(site !== undefined ? site === true : msg.global === true);
+      const nextBrightness = msg.brightness || brightness;
+      const brightnessChanged = nextBrightness !== brightness;
+      brightness = nextBrightness;
+      siteState = msg.siteState === null || msg.siteState === undefined ? undefined : msg.siteState;
+      globalSetting = msg.global;
+      syncState(brightnessChanged);
       sendResponse({ ok: true });
     }
   });

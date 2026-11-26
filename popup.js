@@ -30,59 +30,123 @@ chrome.storage.local.get(["last_tab"], (data) => {
 // ═══════════════════════════════════
 //  Dark Mode
 // ═══════════════════════════════════
-// Two switches. "All sites" (darkmode_global) is the default for every site.
-// The big switch is for the current site only (darkmode_<host>); it overrides
-// "All sites" and stays saved until "Follow all sites" removes it.
+// "All sites" (darkmode_global) is the default for every site: false (Off),
+// "auto" (Prague sunset to 1h after sunrise), or true (On). The big switch is
+// for the current site only (darkmode_<host>); it overrides "All sites" and
+// stays saved until "Follow all sites" removes it.
 const darkToggle = document.getElementById("darkToggle");
 const darkStatus = document.getElementById("darkStatus");
 const darkHostEl = document.getElementById("darkHost");
 const darkBrightness = document.getElementById("darkBrightness");
 const darkBrightnessVal = document.getElementById("darkBrightnessVal");
-const darkGlobalToggle = document.getElementById("darkGlobalToggle");
+const darkGlobalModeEl = document.getElementById("darkGlobalMode");
+const darkGlobalButtons = darkGlobalModeEl.querySelectorAll("button[data-mode]");
+const darkGlobalSub = document.getElementById("darkGlobalSub");
+const darkScheduleStatus = document.getElementById("darkScheduleStatus");
 const darkOverrideLabel = document.getElementById("darkOverrideLabel");
 const darkOverrideSub = document.getElementById("darkOverrideSub");
 const darkClearSite = document.getElementById("darkClearSite");
 
 let darkHost = "";
+let darkScheduleRefreshTimer = 0;
 
 function darkSiteKey() {
   return "darkmode_" + darkHost;
 }
 
+function normalizeGlobalMode(value) {
+  if (value === true) return "on";
+  if (value === "auto") return "auto";
+  return "off";
+}
+
+function globalModeToStorage(mode) {
+  if (mode === "on") return true;
+  if (mode === "auto") return "auto";
+  return false;
+}
+
+function updateDarkGlobalUI(mode, scheduleState) {
+  darkGlobalButtons.forEach((btn) => {
+    const active = btn.dataset.mode === mode;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-checked", String(active));
+  });
+
+  clearTimeout(darkScheduleRefreshTimer);
+  darkScheduleRefreshTimer = 0;
+
+  if (mode === "auto") {
+    const s = scheduleState;
+    const startStr = darkmodeSchedule.formatPragueTime(s.darkStart);
+    const endStr = darkmodeSchedule.formatPragueTime(s.darkEnd);
+    const nextStr = darkmodeSchedule.formatPragueTime(s.nextChange);
+    darkGlobalSub.textContent = "Prague daylight: ON at sunset, OFF 1h after sunrise.";
+    darkScheduleStatus.hidden = false;
+    darkScheduleStatus.innerHTML = s.isDark
+      ? `<span class="state-on">ON now</span> · turns OFF at ${nextStr} (dark ${startStr}–${endStr})`
+      : `<span class="state-off">OFF now</span> · turns ON at ${nextStr} (dark ${startStr}–${endStr})`;
+
+    // Refresh live if the popup stays open across sunset or sunrise + 1h.
+    const delay = Math.max(1000, Math.min(s.nextChange - Date.now() + 500, 60 * 60 * 1000));
+    darkScheduleRefreshTimer = setTimeout(loadDarkMode, delay);
+  } else if (mode === "on") {
+    darkGlobalSub.textContent = "On for every site. The switch above overrides it for this site.";
+    darkScheduleStatus.hidden = true;
+    darkScheduleStatus.textContent = "";
+  } else {
+    darkGlobalSub.textContent = "Off by default. The switch above overrides it for this site.";
+    darkScheduleStatus.hidden = true;
+    darkScheduleStatus.textContent = "";
+  }
+}
+
 async function loadDarkMode() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab || !tab.url) return;
+  darkHost = "";
+  if (tab && tab.url && !/^(chrome|edge|about|chrome-extension|view-source):/.test(tab.url)) {
+    try { darkHost = new URL(tab.url).hostname; } catch { darkHost = ""; }
+  }
+  darkHostEl.textContent = darkHost ? `This site: ${darkHost}` : "Not a regular web page";
+  darkToggle.disabled = !darkHost;
 
-  try { darkHost = new URL(tab.url).hostname; } catch { darkHost = ""; }
-  darkHostEl.textContent = darkHost ? `This site: ${darkHost}` : "";
-
-  const data = await chrome.storage.local.get([
-    darkSiteKey(), "darkmode_global", "darkmode_brightness",
-  ]);
+  const keys = ["darkmode_global", "darkmode_brightness"];
+  if (darkHost) keys.push(darkSiteKey());
+  const data = await chrome.storage.local.get(keys);
 
   const brightness = data.darkmode_brightness || 100;
   darkBrightness.value = brightness;
   darkBrightnessVal.textContent = brightness + "%";
 
+  const siteState = darkHost ? data[darkSiteKey()] : undefined;
+  const globalMode = normalizeGlobalMode(data.darkmode_global);
+  const scheduleState = globalMode === "auto" ? darkmodeSchedule.getState() : null;
+  const globalDark =
+    globalMode === "on" ? true :
+    globalMode === "auto" ? scheduleState.isDark :
+    false;
+
   // ON means "dark mode is on here", also when the page is already dark and
   // the content script therefore leaves it as it is.
-  const siteState = data[darkSiteKey()];
-  const globalState = data.darkmode_global || false;
-  const enabled = siteState !== undefined ? siteState : globalState;
+  const enabled = siteState !== undefined ? siteState : globalDark;
 
   darkToggle.checked = enabled;
   updateDarkStatus(enabled);
-  updateDarkOverrideRow(siteState, globalState);
+  updateDarkGlobalUI(globalMode, scheduleState);
+  updateDarkOverrideRow(siteState, globalMode, globalDark);
 }
 
-function updateDarkOverrideRow(siteState, globalState) {
-  darkGlobalToggle.checked = globalState;
+function updateDarkOverrideRow(siteState, globalMode, globalDark) {
   darkOverrideLabel.textContent = darkHost || "This site";
-  darkClearSite.disabled = siteState === undefined;
-  if (siteState !== undefined) {
+  darkClearSite.disabled = !darkHost || siteState === undefined;
+  if (!darkHost) {
+    darkOverrideSub.textContent = "Open a website to set a per-site override";
+  } else if (siteState !== undefined) {
     darkOverrideSub.textContent = `Saved: always ${siteState ? "ON" : "OFF"} on this site`;
+  } else if (globalMode === "auto") {
+    darkOverrideSub.textContent = `Following All sites (Auto · currently ${globalDark ? "ON" : "OFF"})`;
   } else {
-    darkOverrideSub.textContent = `Following All sites (${globalState ? "ON" : "OFF"})`;
+    darkOverrideSub.textContent = `Following All sites (${globalDark ? "ON" : "OFF"})`;
   }
 }
 
@@ -93,6 +157,7 @@ function updateDarkStatus(on) {
 
 // The big switch: saves ON or OFF for the current site only.
 async function applyDark() {
+  if (!darkHost) return;
   const enabled = darkToggle.checked;
   const brightness = parseInt(darkBrightness.value);
   updateDarkStatus(enabled);
@@ -110,23 +175,28 @@ async function applyDark() {
   }
 
   const after = await chrome.storage.local.get([darkSiteKey(), "darkmode_global"]);
-  updateDarkOverrideRow(after[darkSiteKey()], after.darkmode_global === true);
+  const globalMode = normalizeGlobalMode(after.darkmode_global);
+  const globalDark =
+    globalMode === "on" ? true :
+    globalMode === "auto" ? darkmodeSchedule.getState().isDark :
+    false;
+  updateDarkOverrideRow(after[darkSiteKey()], globalMode, globalDark);
 }
 
 // Hand the content script the full picture so it can recompute which of
 // site override / global default applies.
 async function pushDarkSettings() {
-  const data = await chrome.storage.local.get([
-    darkSiteKey(), "darkmode_global", "darkmode_brightness",
-  ]);
+  const keys = ["darkmode_global", "darkmode_brightness"];
+  if (darkHost) keys.push(darkSiteKey());
+  const data = await chrome.storage.local.get(keys);
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab) return;
-  const siteState = data[darkSiteKey()];
+  const siteState = darkHost ? data[darkSiteKey()] : undefined;
   try {
     await chrome.tabs.sendMessage(tab.id, {
       type: "darkmode_settings",
       siteState: siteState === undefined ? null : siteState,
-      global: data.darkmode_global === true,
+      global: data.darkmode_global,
       brightness: data.darkmode_brightness || 100,
     });
   } catch {
@@ -136,12 +206,14 @@ async function pushDarkSettings() {
 
 darkToggle.addEventListener("change", applyDark);
 
-// "All sites". The old separate "darkmode_auto" key is migrated into
-// darkmode_global by background.js.
-darkGlobalToggle.addEventListener("change", async () => {
-  await chrome.storage.local.set({ darkmode_global: darkGlobalToggle.checked });
-  await pushDarkSettings();
-  await loadDarkMode();
+// "All sites" (Off / Auto / On). The old separate "darkmode_auto" key is
+// migrated into darkmode_global by background.js.
+darkGlobalButtons.forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    await chrome.storage.local.set({ darkmode_global: globalModeToStorage(btn.dataset.mode) });
+    await pushDarkSettings();
+    await loadDarkMode();
+  });
 });
 
 darkClearSite.addEventListener("click", async () => {
